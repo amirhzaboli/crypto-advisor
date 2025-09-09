@@ -12,6 +12,12 @@ st.set_page_config(page_title="Crypto Portfolio & Buy Advisor", layout="wide")
 if "page" not in st.session_state:
     st.session_state.page = "stage1_rules"
 
+if "API_KEY" not in st.session_state:
+    st.session_state.API_KEY = ""
+
+if "ACCESS_TOKEN" not in st.session_state:
+    st.session_state.ACCESS_TOKEN = ""
+
 # === Shared Helpers ===
 def fetch_fear_greed():
     url = "https://api.alternative.me/fng/?limit=1"
@@ -118,6 +124,23 @@ def analyze_stage1(my_coins):
             continue
     return pd.DataFrame(results)
 
+def fetch_swyftx_balances(api_key, access_token):
+    url = "https://api.swyftx.com.au/user/balance/"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+    try:
+        resp = requests.get(url, headers=headers)
+        if resp.status_code != 200:
+            return []
+        balances = resp.json()
+        if isinstance(balances, list):
+            return [item["asset"] for item in balances if float(item.get("available", 0)) > 0]
+    except:
+        return []
+    return []
+
 # === Stage 2 Logic ===
 def fetch_top_coins():
     url = "https://api.coinlore.net/api/tickers/?start=0&limit=20"
@@ -202,27 +225,92 @@ def analyze_coin(symbol, trending_coins):
 
 # === UI ===
 if st.session_state.page == "stage1_rules":
-    st.title("📘 Stage 1: Portfolio Advisor - Rules & Assumptions")
-    st.write("- Analyzes your Swyftx portfolio (demo coins used)\n- Uses RSI, MACD, S/R, News, Fear/Greed\n- Recommends SELL / KEEP / HOLD")
+    st.title("📘 Stage 1: Portfolio Advisor – Rules, Assumptions & Limitations")
+
+    st.markdown("""
+    ### 🔹 Purpose
+    - This stage analyzes your **current Swyftx portfolio holdings**.
+    - It helps you decide whether to **SELL / KEEP / HOLD** each coin.
+
+    ### 🔹 Indicators Used
+    1. **RSI** – Overbought (≥70 → SELL), Oversold (≤30 → KEEP)
+    2. **MACD** – Bullish (MACD > Signal → KEEP), Bearish (MACD < Signal → SELL)
+    3. **Support & Resistance** – Finds recent stop-loss & target-sell
+    4. **News Sentiment** – Positive → KEEP, Negative → SELL, Neutral otherwise
+    5. **Fear & Greed Index** – Market-wide sentiment measure
+
+    ### 🔹 Confidence Levels
+    - Each indicator “votes” for SELL or KEEP
+    - Confidence % = (votes ÷ total) × 100
+    - Example: RSI=SELL, MACD=SELL → SELL (100% confidence)
+
+    ### 🔹 Limitations
+    - Prices from Yahoo Finance (some coins unsupported)
+    - News via CryptoPanic demo key (limited coverage)
+    - If balances not available → ⚠️ NO COIN IS AVAILABLE
+    - Uses last 3 months of daily candles (not intraday)
+    - Not financial advice
+    """)
+
+    st.session_state.API_KEY = st.text_input("🔑 Swyftx API Key", type="password")
+    st.session_state.ACCESS_TOKEN = st.text_input("🪙 Swyftx API Token (JWT)", type="password")
+
     if st.button("Proceed to Stage 1 Results"):
         st.session_state.page = "stage1_results"
 
 elif st.session_state.page == "stage1_results":
     st.title("📊 Stage 1 Results")
-    demo_coins = ["BTC", "ETH", "ADA"]  # demo
-    df1 = analyze_stage1(demo_coins)
-    st.dataframe(df1, use_container_width=True)
+
+    coins = []
+    if st.session_state.API_KEY and st.session_state.ACCESS_TOKEN:
+        coins = fetch_swyftx_balances(st.session_state.API_KEY, st.session_state.ACCESS_TOKEN)
+
+    if not coins:
+        st.warning("⚠️ NO COIN IS AVAILABLE")
+    else:
+        df1 = analyze_stage1(coins)
+        st.dataframe(df1, use_container_width=True)
+
     if st.button("Proceed to Stage 2 Rules"):
         st.session_state.page = "stage2_rules"
 
 elif st.session_state.page == "stage2_rules":
-    st.title("📘 Stage 2: Buy Suggestor - Rules & Assumptions")
-    st.write("- Analyzes Top 20 coins by volume\n- Uses RSI, MACD, Volume, Patterns, News, Influencers\n- Recommends BUY / HOLD / AVOID")
+    st.title("📘 Stage 2: Buy Suggestor – Rules, Assumptions & Limitations")
+
+    st.markdown("""
+    ### 🔹 Purpose
+    - This stage analyzes the **Top 20 coins by 24h trading volume**
+    - It suggests whether to **BUY / HOLD / AVOID** each coin
+
+    ### 🔹 Indicators & Factors Used
+    1. **RSI** – Oversold ≤30 → +1, Overbought ≥70 → -1
+    2. **MACD** – Bullish (MACD > Signal) → +1, Bearish → -1
+    3. **Volume Spikes** – If volume > 1.5 × median → +1
+    4. **Chart Patterns** – Bullish: +1, Bearish: -1
+    5. **News Sentiment** – Positive +1, Negative -1
+    6. **Influencer Proxy** – If trending on CoinGecko → +1
+
+    ### 🔹 Confidence Levels
+    - Weighted system:
+        - RSI: 15%, MACD: 15%, Volume: 20%, Pattern: 25%, News: 15%, Influencer: 10%
+    - Confidence = (Raw Score + 1)/2 × 100
+    - BUY > 65%, HOLD ≥ 40%, AVOID < 40%
+
+    ### 🔹 Limitations
+    - Yahoo Finance may not support all coins
+    - Pattern detection is simplified
+    - News via CryptoPanic demo (limited coverage)
+    - Influencer proxy only checks trending coins
+    - Uses 90 days of daily candles (not intraday)
+    - Not financial advice
+    """)
+
     if st.button("Proceed to Stage 2 Results"):
         st.session_state.page = "stage2_results"
 
 elif st.session_state.page == "stage2_results":
     st.title("📊 Stage 2 Results")
+
     top_coins = fetch_top_coins()
     trending_coins = []
     try:
@@ -230,10 +318,15 @@ elif st.session_state.page == "stage2_results":
         if r.status_code == 200:
             trending_coins = [c["item"]["symbol"].upper() for c in r.json()["coins"]]
     except: pass
+
     results = []
     for coin in top_coins:
         res = analyze_coin(coin, trending_coins)
         if res: results.append(res)
         time.sleep(1)
-    df2 = pd.DataFrame(results)
-    st.dataframe(df2, use_container_width=True)
+
+    if not results:
+        st.warning("⚠️ No analysis generated")
+    else:
+        df2 = pd.DataFrame(results)
+        st.dataframe(df2, use_container_width=True)
